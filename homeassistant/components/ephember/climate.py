@@ -1,6 +1,7 @@
 """Support for the EPH Controls Ember themostats."""
 from __future__ import annotations
 
+from . import const
 from datetime import timedelta
 import logging
 from typing import Any
@@ -8,10 +9,10 @@ from typing import Any
 from pyephember.pyephember import (
     EphEmber,
     ZoneMode,
+    boiler_state,
     zone_current_temperature,
     zone_is_active,
     zone_is_boost_active,
-    zone_is_hot_water,
     zone_mode,
     zone_name,
     zone_target_temperature,
@@ -41,14 +42,14 @@ _LOGGER = logging.getLogger(__name__)
 # Return cached results if last scan was less then this time ago
 SCAN_INTERVAL = timedelta(seconds=120)
 
-OPERATION_LIST = [HVACMode.HEAT_COOL, HVACMode.HEAT, HVACMode.OFF]
+OPERATION_LIST = [HVACMode.AUTO, HVACMode.HEAT, HVACMode.OFF]
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {vol.Required(CONF_USERNAME): cv.string, vol.Required(CONF_PASSWORD): cv.string}
 )
 
 EPH_TO_HA_STATE = {
-    "AUTO": HVACMode.HEAT_COOL,
+    "AUTO": HVACMode.AUTO,
     "ON": HVACMode.HEAT,
     "OFF": HVACMode.OFF,
 }
@@ -89,7 +90,7 @@ class EphEmberThermostat(ClimateEntity):
         self._ember = ember
         self._zone_name = zone_name(zone)
         self._zone = zone
-        self._hot_water = zone_is_hot_water(zone)
+        self._hot_water = EPHDeviceType.IMMERSION # Hot Water temp cannot be changed
 
         self._attr_name = self._zone_name
 
@@ -114,7 +115,7 @@ class EphEmberThermostat(ClimateEntity):
     @property
     def hvac_action(self) -> HVACAction:
         """Return current HVAC action."""
-        if zone_is_active(self._zone):
+        if boiler_state(self._zone) == EPHBoilerStates.ON
             return HVACAction.HEATING
 
         return HVACAction.IDLE
@@ -129,7 +130,7 @@ class EphEmberThermostat(ClimateEntity):
         """Set the operation mode."""
         mode = self.map_mode_hass_eph(hvac_mode)
         if mode is not None:
-            self._ember.set_mode_by_name(self._zone_name, mode)
+            self._ember.set_zone_mode(self._zone_name, mode)
         else:
             _LOGGER.error("Invalid operation mode provided %s", hvac_mode)
 
@@ -141,13 +142,13 @@ class EphEmberThermostat(ClimateEntity):
 
     def turn_aux_heat_on(self) -> None:
         """Turn auxiliary heater on."""
-        self._ember.activate_boost_by_name(
+        self._ember.activate_zone_boost(
             self._zone_name, zone_target_temperature(self._zone)
         )
 
     def turn_aux_heat_off(self) -> None:
         """Turn auxiliary heater off."""
-        self._ember.deactivate_boost_by_name(self._zone_name)
+        self._ember.deactivate_zone_boost(self._zone_name)
 
     def set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
@@ -163,7 +164,7 @@ class EphEmberThermostat(ClimateEntity):
         if temperature > self.max_temp or temperature < self.min_temp:
             return
 
-        self._ember.set_target_temperture_by_name(self._zone_name, temperature)
+        self._ember.set_zone_target_temperature(self._zone_name, temperature)
 
     @property
     def min_temp(self):
